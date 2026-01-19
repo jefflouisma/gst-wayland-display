@@ -10,7 +10,7 @@ use gstreamer_allocators::{DmaBufAllocator, FdMemoryFlags};
 use smithay::backend::allocator::dmabuf::{Dmabuf, DmabufAllocator};
 use smithay::backend::allocator::gbm::{GbmAllocator, GbmBufferFlags, GbmDevice};
 use smithay::backend::allocator::{Allocator, Buffer, Fourcc};
-use smithay::backend::drm::DrmNode;
+use smithay::backend::drm::{DrmNode, NodeType};
 use smithay::backend::egl::ffi::egl::types::EGLDisplay;
 use smithay::backend::renderer::gles::{GlesError, GlesRenderbuffer, GlesRenderer, GlesTarget};
 use smithay::backend::renderer::{Bind, ExportMem, Offscreen, Renderer};
@@ -55,14 +55,46 @@ pub struct GsDmaBuf {
     gst_allocator: DmaBufAllocator,
 }
 
-pub fn new_gbm_device(render_node: DrmNode) -> Option<GbmDevice<DeviceFd>> {
+// Helper function to create GBM device from a specific node path
+fn try_gbm_device_from_node(node: &DrmNode) -> Option<GbmDevice<DeviceFd>> {
+    let path = node.dev_path()?;
+    tracing::debug!("Attempting GBM device creation from: {:?}", path);
     let file = File::options()
         .read(true)
         .write(true)
-        .open(render_node.dev_path()?.as_path())
+        .open(path.as_path())
         .ok()?;
     let fd = DeviceFd::from(Into::<OwnedFd>::into(file));
-    GbmDevice::new(fd).ok()
+    match GbmDevice::new(fd) {
+        Ok(gbm) => {
+            tracing::info!("Successfully created GBM device from: {:?}", path);
+            Some(gbm)
+        }
+        Err(e) => {
+            tracing::debug!("Failed to create GBM device from {:?}: {:?}", path, e);
+            None
+        }
+    }
+}
+
+/// Create a GBM device from a DRM node.
+/// 
+/// NVIDIA's libnvidia-egl-gbm.so requires the primary/card node (e.g., /dev/dri/card1)
+/// rather than the render node (e.g., /dev/dri/renderD129) for gbm_create_device().
+/// 
+/// This function tries the primary node first (for NVIDIA compatibility), then
+/// falls back to the render node (for Intel/AMD which work with either).
+pub fn new_gbm_device(render_node: DrmNode) -> Option<GbmDevice<DeviceFd>> {
+    // Try primary node first (required for NVIDIA GBM)
+    if let Some(Ok(primary_node)) = render_node.node_with_type(NodeType::Primary) {
+        if let Some(gbm) = try_gbm_device_from_node(&primary_node) {
+            return Some(gbm);
+        }
+        tracing::warn!("Primary node GBM creation failed, trying render node");
+    }
+    
+    // Fallback to render node (works for Intel/AMD)
+    try_gbm_device_from_node(&render_node)
 }
 
 impl GsDmaBuf {
