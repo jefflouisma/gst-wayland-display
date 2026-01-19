@@ -161,40 +161,80 @@ impl GsCUDABuf {
         let allocator = GbmAllocator::new(gbm, GbmBufferFlags::RENDERING);
         let mut dma_allocator = DmabufAllocator(allocator);
 
-        let modifiers = [drm_modifier];
-        let result = dma_allocator.create_buffer(
-            video_info.width(),
-            video_info.height(),
-            drm_fourcc,
-            &modifiers,
-        );
+        // NVIDIA FIX: Try the requested modifier first, then fall back to Linear
+        // NVIDIA 580+ drivers often fail with specific modifiers but support Linear
+        let modifiers_to_try: Vec<Modifier> = if drm_modifier == Modifier::Linear {
+            vec![Modifier::Linear]
+        } else {
+            vec![drm_modifier, Modifier::Linear]
+        };
 
-        match result {
-            Ok(buffer) => {
-                // Create EGLImage once during initialization
-                let egl_image = EGLImage::from(&buffer, egl_display)
-                    .expect("Failed to create EGLImage from DMA-BUF");
+        let mut last_error: Option<String> = None;
+        for modifier in &modifiers_to_try {
+            tracing::debug!("Trying CUDA buffer allocation with modifier: {:?}", modifier);
+            let result = dma_allocator.create_buffer(
+                video_info.width(),
+                video_info.height(),
+                drm_fourcc,
+                &[*modifier],
+            );
 
-                // Create CUDAImage once during initialization
-                let cuda_image = {
-                    let ctx = cuda_context.lock().unwrap();
-                    CUDAImage::from(egl_image, &ctx)
-                        .expect("Failed to create CUDA image from EGLImage")
-                };
+            match result {
+                Ok(buffer) => {
+                    if *modifier != drm_modifier {
+                        tracing::warn!(
+                            "CUDA buffer allocation succeeded with fallback modifier {:?} (requested: {:?})",
+                            modifier,
+                            drm_modifier
+                        );
+                    } else {
+                        tracing::info!("CUDA buffer allocation succeeded with modifier {:?}", modifier);
+                    }
 
-                Some(GsCUDABuf {
-                    buffer,
-                    video_info,
-                    buffer_pool,
-                    cuda_image: Arc::new(Mutex::new(cuda_image)),
-                    cuda_context,
-                })
-            }
-            Err(_) => {
-                tracing::warn!("Failed to create DMA buffer: {}", result.unwrap_err());
-                None
+                    // Create EGLImage once during initialization
+                    let egl_image = match EGLImage::from(&buffer, egl_display) {
+                        Ok(img) => img,
+                        Err(e) => {
+                            tracing::warn!("Failed to create EGLImage from DMA-BUF with modifier {:?}: {:?}", modifier, e);
+                            last_error = Some(format!("EGLImage creation failed: {:?}", e));
+                            continue;
+                        }
+                    };
+
+                    // Create CUDAImage once during initialization
+                    let cuda_image = {
+                        let ctx = cuda_context.lock().unwrap();
+                        match CUDAImage::from(egl_image, &ctx) {
+                            Ok(img) => img,
+                            Err(e) => {
+                                tracing::warn!("Failed to create CUDA image from EGLImage with modifier {:?}: {:?}", modifier, e);
+                                last_error = Some(format!("CUDAImage creation failed: {:?}", e));
+                                continue;
+                            }
+                        }
+                    };
+
+                    return Some(GsCUDABuf {
+                        buffer,
+                        video_info,
+                        buffer_pool,
+                        cuda_image: Arc::new(Mutex::new(cuda_image)),
+                        cuda_context,
+                    });
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to create DMA buffer with modifier {:?}: {}", modifier, e);
+                    last_error = Some(format!("DMA buffer creation failed: {}", e));
+                }
             }
         }
+
+        tracing::error!(
+            "Failed to create CUDA buffer with any modifier. Tried: {:?}. Last error: {:?}",
+            modifiers_to_try,
+            last_error
+        );
+        None
     }
 }
 
