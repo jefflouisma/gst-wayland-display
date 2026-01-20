@@ -590,19 +590,28 @@ pub(crate) fn init(
                         None => match state.render_node {
                             // If there's no output_buffer, we'll return all supported DMA formats
                             Some(node) => {
-                                let gbm_dev =
-                                    new_gbm_device(node).expect("Failed to create gbm device");
-                                formats
-                                    .unwrap_or_default()
-                                    .iter()
-                                    .filter(|f| {
-                                        gbm_dev.is_format_supported(
-                                            f.code,
-                                            BufferObjectFlags::RENDERING,
-                                        )
-                                    })
-                                    .map(|f| *f)
-                                    .collect()
+                                // Try to create GBM device for DMA format filtering
+                                // If GBM fails (e.g., NVIDIA in containerized env), return default formats
+                                // which allows fallback to non-zero-copy streaming
+                                match new_gbm_device(node) {
+                                    Some(gbm_dev) => {
+                                        formats
+                                            .unwrap_or_default()
+                                            .iter()
+                                            .filter(|f| {
+                                                gbm_dev.is_format_supported(
+                                                    f.code,
+                                                    BufferObjectFlags::RENDERING,
+                                                )
+                                            })
+                                            .map(|f| *f)
+                                            .collect()
+                                    }
+                                    None => {
+                                        tracing::warn!("GBM device creation failed, using default DMA formats (no zero-copy)");
+                                        FormatSet::default()
+                                    }
+                                }
                             }
                             None => FormatSet::default(),
                         },
