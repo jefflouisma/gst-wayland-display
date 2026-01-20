@@ -663,14 +663,23 @@ impl BaseSrcImpl for WaylandDisplaySrc {
                     let chosen_format =
                         gst_video_format_name_to_drm_fourcc(base_video_info.format().to_string())
                             .expect("failed to get drm format");
-                    let format = dma_formats
+                    // Find matching DRM format, or fallback to Linear if no formats available (GBM failed)
+                    let (fourcc, modifier) = match dma_formats
                         .iter()
-                        .filter(|dma_format| dma_format.code == chosen_format)
-                        .next()
-                        .expect("failed to find a matching DRM format for the CUDA format");
-                    let modifier: u64 = format.modifier.into();
+                        .find(|dma_format| dma_format.code == chosen_format)
+                    {
+                        Some(format) => (format.code, format.modifier.into()),
+                        None => {
+                            // GBM device creation failed, no DMA formats available
+                            // Fallback to Linear modifier for software fallback
+                            tracing::warn!(
+                                "No DMA formats available (GBM failed?), using Linear modifier for CUDA format"
+                            );
+                            (chosen_format, 0u64) // Linear modifier is 0
+                        }
+                    };
                     let video_info =
-                        VideoInfoDmaDrm::new(base_video_info, format.code as u32, modifier);
+                        VideoInfoDmaDrm::new(base_video_info, fourcc as u32, modifier);
                     GstVideoInfo::CUDA(CUDAParams {
                         video_info,
                         cuda_context: cuda_context.unwrap(),
