@@ -386,7 +386,7 @@ pub(crate) fn init(
                                             e
                                         );
                                         // Fall back to software rendering using base video info
-                                        let base_video_info = base_info.video_info.as_video_info();
+                                        let base_video_info = base_info.video_info.to_video_info();
                                         let allocator = GsGlesbuffer::new(&mut state.renderer, base_video_info)
                                             .expect("Failed to create fallback GsGlesbuffer");
                                         state.output_buffer = Some(GsBufferType::RAW(allocator));
