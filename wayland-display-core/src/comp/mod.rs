@@ -377,13 +377,12 @@ pub(crate) fn init(
                                     Arc::new(Mutex::new(None)),
                                     &egl_display,
                                 ) {
-                                    Ok(allocator) => {
+                                    Some(allocator) => {
                                         state.output_buffer = Some(GsBufferType::CUDA(allocator));
                                     }
-                                    Err(e) => {
+                                    None => {
                                         tracing::warn!(
-                                            "Failed to create GsCUDABuf: {:?}, falling back to software rendering",
-                                            e
+                                            "Failed to create GsCUDABuf (GBM unavailable?), falling back to software rendering"
                                         );
                                         // Fall back to software rendering using base video info
                                         let base_video_info = base_info.video_info.to_video_info()
