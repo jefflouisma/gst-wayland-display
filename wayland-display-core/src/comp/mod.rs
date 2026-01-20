@@ -368,15 +368,30 @@ pub(crate) fn init(
                                     .display()
                                     .get_display_handle()
                                     .handle;
-                                let allocator = GsCUDABuf::new(
+                                // Try to create CUDA buffer, fall back to software if it fails
+                                // (e.g., GBM unavailable in containerized NVIDIA environments)
+                                match GsCUDABuf::new(
                                     render_node.unwrap(),
-                                    base_info.cuda_context,
-                                    base_info.video_info,
+                                    base_info.cuda_context.clone(),
+                                    base_info.video_info.clone(),
                                     Arc::new(Mutex::new(None)),
                                     &egl_display,
-                                )
-                                .expect("Failed to create GsCUDABuf");
-                                state.output_buffer = Some(GsBufferType::CUDA(allocator));
+                                ) {
+                                    Ok(allocator) => {
+                                        state.output_buffer = Some(GsBufferType::CUDA(allocator));
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            "Failed to create GsCUDABuf: {:?}, falling back to software rendering",
+                                            e
+                                        );
+                                        // Fall back to software rendering using base video info
+                                        let base_video_info = base_info.video_info.as_video_info();
+                                        let allocator = GsGlesbuffer::new(&mut state.renderer, base_video_info)
+                                            .expect("Failed to create fallback GsGlesbuffer");
+                                        state.output_buffer = Some(GsBufferType::RAW(allocator));
+                                    }
+                                }
                             }
                         },
                         RenderTarget::Software => {
