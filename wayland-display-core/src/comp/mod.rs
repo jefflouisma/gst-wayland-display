@@ -459,10 +459,16 @@ pub(crate) fn init(
                         };
                         if let Err(_) = match state.create_frame() {
                             Ok((buf, render_result)) => {
-                                render_result
-                                    .sync
-                                    .wait()
-                                    .expect("Error during render_result.sync"); // we need to wait before giving a hardware buffer to gstreamer or we might not be done writing to it
+                                // Wait for GPU sync fence before giving buffer to GStreamer
+                                // On NVIDIA in containers, fence sync can fail intermittently
+                                // Log warning and continue instead of panicking
+                                if let Err(e) = render_result.sync.wait() {
+                                    tracing::warn!(
+                                        "EGL fence sync wait failed (continuing anyway): {:?}. \
+                                         This is common on NVIDIA GPUs in containerized environments.",
+                                        e
+                                    );
+                                }
                                 let res = buffer_sender.send(Ok(buf));
                                 let rendered_states = &render_result.states;
                                 let rendered_damage = render_result.damage.is_some();
