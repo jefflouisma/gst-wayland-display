@@ -17,7 +17,7 @@ use ash::{
 };
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::allocator::format::FormatSet;
-use smithay::backend::allocator::{Format, Fourcc, Modifier};
+use smithay::backend::allocator::{Buffer as AllocatorBuffer, Format, Fourcc, Modifier};
 use smithay::backend::renderer::{
     Bind, Color32F, ContextId, DebugFlags, Frame, ImportDma, ImportMem,
     Renderer, RendererSuper, Texture, TextureFilter,
@@ -181,7 +181,7 @@ impl<'a, 'buffer> Frame for VulkanFrame<'a, 'buffer> {
     type TextureId = VulkanTexture;
 
     fn context_id(&self) -> ContextId<Self::TextureId> {
-        ContextId::new(std::any::TypeId::of::<VulkanRenderer>(), self.command_buffer.as_raw() as usize)
+        self.renderer.context_id()
     }
 
     fn clear(&mut self, color: Color32F, at: &[Rectangle<i32, Physical>]) -> Result<(), Self::Error> {
@@ -298,8 +298,9 @@ impl<'a, 'buffer> Frame for VulkanFrame<'a, 'buffer> {
         let fence = unsafe { self.renderer.device.create_fence(&fence_info, None)? };
         
         // Submit command buffer
+        let cmd_buffers = [self.command_buffer];
         let submit_info = vk::SubmitInfo::default()
-            .command_buffers(&[self.command_buffer]);
+            .command_buffers(&cmd_buffers);
         
         unsafe {
             self.renderer.device.queue_submit(
@@ -1134,7 +1135,7 @@ impl RendererSuper for VulkanRenderer {
 
 impl Renderer for VulkanRenderer {
     fn context_id(&self) -> ContextId<Self::TextureId> {
-        ContextId::new(std::any::TypeId::of::<VulkanRenderer>(), self as *const Self as usize)
+        ContextId::default()
     }
 
     fn downscale_filter(&mut self, _filter: TextureFilter) -> Result<(), Self::Error> {
@@ -1374,7 +1375,8 @@ impl ImportMem for VulkanRenderer {
         }
 
         // Submit and wait
-        let submit_info = vk::SubmitInfo::default().command_buffers(&[cmd]);
+        let cmd_buffers = [cmd];
+        let submit_info = vk::SubmitInfo::default().command_buffers(&cmd_buffers);
         unsafe {
             self.device.queue_submit(self.queue, &[submit_info], vk::Fence::null())?;
             self.device.queue_wait_idle(self.queue)?;
