@@ -2,10 +2,10 @@
 name = "wayland-display-core"
 authors = ["Victoria Brekenfeld <git@drakulix.de>", "Alessandro Beltramo <github.com/ABeltramo>"]
 version = "0.2.0"
-edition = "2024"
+edition = "2021"
 license = "MIT"
 description = "Wayland Compositor producing GStreamer buffers"
-rust-version = "1.88"
+rust-version = "1.80"
 
 [lib]
 name = "waylanddisplaycore"
@@ -15,6 +15,7 @@ path = "src/lib.rs"
 [features]
 default = []
 cuda = ["dep:libloading"]
+vulkan = ["dep:ash", "smithay/backend_vulkan"]  # Direct Vulkan renderer with ash
 
 [dependencies]
 gst.workspace = true
@@ -25,6 +26,9 @@ wayland-backend = "0.3.10"
 wayland-scanner = "0.31.6"
 gstreamer-allocators = { version = "0.23.2", package = "gstreamer-allocators", features = ["v1_24", "v1_16"] }
 libloading = { version = "0.8.9", optional = true }
+
+# Direct Vulkan renderer dependencies (ash)
+ash = { version = "0.38", optional = true }
 
 [build-dependencies]
 pkg-config = "0.3"

@@ -23,6 +23,10 @@ mod tests;
 pub mod utils;
 pub(crate) mod wayland;
 
+// Vulkan renderer (enabled with "vulkan" feature)
+#[cfg(feature = "vulkan")]
+pub mod vulkan_renderer;
+
 pub use crate::utils::video_info::GstVideoInfo;
 
 pub enum Command {
