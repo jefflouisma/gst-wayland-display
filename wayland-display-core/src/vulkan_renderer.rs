@@ -18,8 +18,8 @@ use ash::{
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::allocator::{Format, Fourcc, Modifier};
 use smithay::backend::renderer::{
-    sync::SyncPoint, Bind, DebugFlags, Frame, ImportDma, ImportMem,
-    Renderer, TextureFilter, Unbind,
+    sync::SyncPoint, Bind, Color32F, ContextId, DebugFlags, Frame, ImportDma, ImportMem,
+    Renderer, RendererSuper, Texture, TextureFilter,
 };
 use smithay::utils::{Buffer, Physical, Rectangle, Scale, Size, Transform};
 use std::collections::{HashMap, HashSet};
@@ -102,10 +102,17 @@ pub struct VulkanTexture {
     format: Fourcc,
 }
 
-impl VulkanTexture {
-    /// Get the size of the texture
-    pub fn size(&self) -> Size<i32, Buffer> {
-        self.size
+impl Texture for VulkanTexture {
+    fn width(&self) -> u32 {
+        self.size.w as u32
+    }
+
+    fn height(&self) -> u32 {
+        self.size.h as u32
+    }
+
+    fn format(&self) -> Option<Fourcc> {
+        Some(self.format)
     }
 }
 
@@ -163,24 +170,27 @@ struct RenderTarget {
 // ============================================================================
 
 /// Frame for Vulkan rendering operations
-pub struct VulkanFrame<'a> {
+pub struct VulkanFrame<'a, 'buffer> {
     renderer: &'a mut VulkanRenderer,
     size: Size<i32, Physical>,
     command_buffer: vk::CommandBuffer,
+    _phantom: std::marker::PhantomData<&'buffer ()>,
 }
 
-impl<'a> Frame for VulkanFrame<'a> {
+impl<'a, 'buffer> Frame for VulkanFrame<'a, 'buffer> {
     type Error = VulkanError;
     type TextureId = VulkanTexture;
 
-    fn id(&self) -> usize {
-        self.command_buffer.as_raw() as usize
+    fn context_id(&self) -> ContextId<Self::TextureId> {
+        ContextId::new(std::any::TypeId::of::<VulkanRenderer>(), self.command_buffer.as_raw() as usize)
     }
 
-    fn clear(&mut self, color: [f32; 4], at: &[Rectangle<i32, Physical>]) -> Result<(), Self::Error> {
+    fn clear(&mut self, color: Color32F, at: &[Rectangle<i32, Physical>]) -> Result<(), Self::Error> {
         debug!("VulkanFrame::clear color={:?}", color);
         
-        let clear_value = vk::ClearColorValue { float32: color };
+        let clear_value = vk::ClearColorValue { 
+            float32: [color.r, color.g, color.b, color.a] 
+        };
         
         // If no specific regions, clear the whole target
         if at.is_empty() {
@@ -234,35 +244,14 @@ impl<'a> Frame for VulkanFrame<'a> {
         Ok(())
     }
 
-    fn draw_solid_rect(
+    fn draw_solid(
         &mut self,
         dst: Rectangle<i32, Physical>,
-        _color: [f32; 4],
-    ) -> Result<(), Self::Error> {
-        debug!("VulkanFrame::draw_solid_rect dst={:?}", dst);
-        // TODO: Use push constants to set color and render a quad
-        Ok(())
-    }
-
-    fn render_texture_at(
-        &mut self,
-        texture: &Self::TextureId,
-        pos: smithay::utils::Point<i32, Physical>,
-        _texture_scale: i32,
-        _output_scale: Scale<f64>,
-        _src: Option<Rectangle<f64, Buffer>>,
-        _dst: Option<Rectangle<i32, Physical>>,
         _damage: &[Rectangle<i32, Physical>],
-        _opaque_regions: Option<&[Rectangle<i32, Physical>]>,
-        _kind: smithay::backend::renderer::element::Kind,
+        color: Color32F,
     ) -> Result<(), Self::Error> {
-        debug!("VulkanFrame::render_texture_at id={} pos={:?}", texture.id, pos);
-        
-        // Get texture inner data
-        if let Some(_tex_inner) = self.renderer.textures.get(&texture.id) {
-            // TODO: Bind descriptor set with texture and render quad at position
-        }
-        
+        debug!("VulkanFrame::draw_solid dst={:?} color={:?}", dst, color);
+        // TODO: Use push constants to set color and render a quad
         Ok(())
     }
 
@@ -272,7 +261,7 @@ impl<'a> Frame for VulkanFrame<'a> {
         src: Rectangle<f64, Buffer>,
         dst: Rectangle<i32, Physical>,
         _damage: &[Rectangle<i32, Physical>],
-        _opaque_regions: Option<&[Rectangle<i32, Physical>]>,
+        _opaque_regions: &[Rectangle<i32, Physical>],
         _transform: Transform,
         _alpha: f32,
     ) -> Result<(), Self::Error> {
@@ -292,7 +281,12 @@ impl<'a> Frame for VulkanFrame<'a> {
         Transform::Normal
     }
 
-    fn finish(self) -> Result<VulkanSyncPoint, Self::Error> {
+    fn wait(&mut self, sync: &smithay::backend::renderer::sync::SyncPoint) -> Result<(), Self::Error> {
+        sync.wait();
+        Ok(())
+    }
+
+    fn finish(self) -> Result<smithay::backend::renderer::sync::SyncPoint, Self::Error> {
         debug!("VulkanFrame::finish - submitting command buffer");
         
         // End command buffer
@@ -316,10 +310,12 @@ impl<'a> Frame for VulkanFrame<'a> {
             )?;
         }
         
-        Ok(VulkanSyncPoint {
-            fence: Some(fence),
-            device: Some(self.renderer.device.clone()),
-        })
+        // Wait for completion and return signaled sync point
+        unsafe {
+            self.renderer.device.wait_for_fences(&[fence], true, u64::MAX).ok();
+        }
+        
+        Ok(smithay::backend::renderer::sync::SyncPoint::signaled())
     }
 }
 
@@ -1090,16 +1086,56 @@ impl Drop for VulkanRenderer {
 }
 
 // ============================================================================
+// Framebuffer wrapper for Vulkan render target
+// ============================================================================
+
+/// Vulkan framebuffer wrapper that implements Texture
+pub struct VulkanFramebuffer {
+    size: Size<i32, Physical>,
+    format: vk::Format,
+}
+
+impl std::fmt::Debug for VulkanFramebuffer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VulkanFramebuffer")
+            .field("size", &self.size)
+            .finish()
+    }
+}
+
+impl Texture for VulkanFramebuffer {
+    fn width(&self) -> u32 {
+        self.size.w as u32
+    }
+
+    fn height(&self) -> u32 {
+        self.size.h as u32
+    }
+
+    fn format(&self) -> Option<Fourcc> {
+        // Map back from Vulkan format to DRM fourcc
+        match self.format {
+            vk::Format::B8G8R8A8_UNORM => Some(Fourcc::Argb8888),
+            vk::Format::R8G8B8A8_UNORM => Some(Fourcc::Abgr8888),
+            _ => None,
+        }
+    }
+}
+
+// ============================================================================
 // Smithay Renderer Trait Implementation
 // ============================================================================
 
-impl Renderer for VulkanRenderer {
+impl RendererSuper for VulkanRenderer {
     type Error = VulkanError;
     type TextureId = VulkanTexture;
-    type Frame<'frame> = VulkanFrame<'frame> where Self: 'frame;
+    type Framebuffer<'buffer> = VulkanFramebuffer;
+    type Frame<'frame, 'buffer> = VulkanFrame<'frame, 'buffer> where 'buffer: 'frame, Self: 'frame;
+}
 
-    fn id(&self) -> usize {
-        self as *const Self as usize
+impl Renderer for VulkanRenderer {
+    fn context_id(&self) -> ContextId<Self::TextureId> {
+        ContextId::new(std::any::TypeId::of::<VulkanRenderer>(), self as *const Self as usize)
     }
 
     fn downscale_filter(&mut self, _filter: TextureFilter) -> Result<(), Self::Error> {
@@ -1118,11 +1154,15 @@ impl Renderer for VulkanRenderer {
         self.debug_flags
     }
 
-    fn render(
-        &mut self,
+    fn render<'frame, 'buffer>(
+        &'frame mut self,
+        framebuffer: &'frame mut Self::Framebuffer<'buffer>,
         output_size: Size<i32, Physical>,
         _dst_transform: Transform,
-    ) -> Result<Self::Frame<'_>, Self::Error> {
+    ) -> Result<Self::Frame<'frame, 'buffer>, Self::Error>
+    where
+        'buffer: 'frame,
+    {
         debug!("VulkanRenderer::render size={:?}", output_size);
         
         // Allocate and begin command buffer
@@ -1133,39 +1173,31 @@ impl Renderer for VulkanRenderer {
             renderer: self,
             size: output_size,
             command_buffer,
+            _phantom: std::marker::PhantomData,
         })
+    }
+
+    fn wait(&mut self, sync: &smithay::backend::renderer::sync::SyncPoint) -> Result<(), Self::Error> {
+        sync.wait();
+        Ok(())
     }
 }
 
 impl Bind<Dmabuf> for VulkanRenderer {
-    fn bind(&mut self, target: Dmabuf) -> Result<(), VulkanError> {
+    fn bind<'a>(&mut self, target: &'a mut Dmabuf) -> Result<Self::Framebuffer<'a>, VulkanError> {
         debug!("VulkanRenderer::bind DMA-BUF {}x{}", target.width(), target.height());
         
         // Create render target from DMA-BUF
-        let render_target = self.create_render_target(&target)?;
+        let render_target = self.create_render_target(target)?;
+        let format = render_target.format;
+        let size = render_target.size;
         self.current_target = Some(render_target);
         
-        Ok(())
+        Ok(VulkanFramebuffer { size, format })
     }
 
-    fn supported_formats(&self) -> Option<HashSet<Format>> {
-        Some(self.supported_formats.clone())
-    }
-}
-
-impl Unbind for VulkanRenderer {
-    fn unbind(&mut self) -> Result<(), <Self as Renderer>::Error> {
-        // Destroy current render target
-        if let Some(target) = self.current_target.take() {
-            unsafe {
-                self.device.destroy_image_view(target.view, None);
-                if target.owns_image {
-                    self.device.destroy_image(target.image, None);
-                }
-                self.device.free_memory(target.memory, None);
-            }
-        }
-        Ok(())
+    fn supported_formats(&self) -> Option<smithay::backend::renderer::FormatSet> {
+        Some(smithay::backend::renderer::FormatSet::from_iter(self.supported_formats.clone()))
     }
 }
 
