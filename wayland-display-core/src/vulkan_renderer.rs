@@ -19,15 +19,14 @@ use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::allocator::format::FormatSet;
 use smithay::backend::allocator::{Format, Fourcc, Modifier};
 use smithay::backend::renderer::{
-    sync::SyncPoint, Bind, Color32F, ContextId, DebugFlags, Frame, ImportDma, ImportMem,
+    Bind, Color32F, ContextId, DebugFlags, Frame, ImportDma, ImportMem,
     Renderer, RendererSuper, Texture, TextureFilter,
 };
 use smithay::utils::{Buffer, Physical, Rectangle, Size, Transform};
 use std::collections::{HashMap, HashSet};
 use std::ffi::CStr;
 use std::os::fd::AsRawFd;
-use std::sync::Arc;
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, trace};
 
 // ============================================================================
 // Error Types
@@ -131,19 +130,18 @@ impl std::fmt::Debug for VulkanSyncPoint {
     }
 }
 
-impl SyncPoint for VulkanSyncPoint {
-    fn wait(&self) -> Result<(), ()> {
+impl VulkanSyncPoint {
+    /// Wait for the sync point to be reached
+    pub fn wait(&self) {
         if let (Some(fence), Some(device)) = (&self.fence, &self.device) {
             unsafe {
-                device
-                    .wait_for_fences(&[*fence], true, u64::MAX)
-                    .map_err(|_| ())?;
+                let _ = device.wait_for_fences(&[*fence], true, u64::MAX);
             }
         }
-        Ok(())
     }
 
-    fn is_reached(&self) -> bool {
+    /// Check if the sync point is reached
+    pub fn is_reached(&self) -> bool {
         if let (Some(fence), Some(device)) = (&self.fence, &self.device) {
             unsafe { device.get_fence_status(*fence).unwrap_or(false) }
         } else {
