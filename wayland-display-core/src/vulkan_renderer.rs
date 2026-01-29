@@ -16,12 +16,13 @@ use ash::{
     Device, Entry, Instance,
 };
 use smithay::backend::allocator::dmabuf::Dmabuf;
+use smithay::backend::allocator::format::FormatSet;
 use smithay::backend::allocator::{Format, Fourcc, Modifier};
 use smithay::backend::renderer::{
     sync::SyncPoint, Bind, Color32F, ContextId, DebugFlags, Frame, ImportDma, ImportMem,
     Renderer, RendererSuper, Texture, TextureFilter,
 };
-use smithay::utils::{Buffer, Physical, Rectangle, Scale, Size, Transform};
+use smithay::utils::{Buffer, Physical, Rectangle, Size, Transform};
 use std::collections::{HashMap, HashSet};
 use std::ffi::CStr;
 use std::os::fd::AsRawFd;
@@ -393,7 +394,7 @@ pub struct VulkanRenderer {
     image_drm_format_modifier: ext::image_drm_format_modifier::Device,
     
     // Supported formats cache
-    supported_formats: HashSet<Format>,
+    supported_formats: FormatSet,
 }
 
 impl std::fmt::Debug for VulkanRenderer {
@@ -770,8 +771,8 @@ impl VulkanRenderer {
     }
 
     /// Query supported DRM formats from the device
-    fn query_supported_formats(instance: &Instance, physical_device: vk::PhysicalDevice) -> HashSet<Format> {
-        let mut formats = HashSet::new();
+    fn query_supported_formats(instance: &Instance, physical_device: vk::PhysicalDevice) -> FormatSet {
+        let mut formats = FormatSet::default();
         
         // Common formats that most Vulkan implementations support
         let common_fourccs = [
@@ -1196,8 +1197,8 @@ impl Bind<Dmabuf> for VulkanRenderer {
         Ok(VulkanFramebuffer { size, format })
     }
 
-    fn supported_formats(&self) -> Option<smithay::backend::renderer::FormatSet> {
-        Some(smithay::backend::renderer::FormatSet::from_iter(self.supported_formats.clone()))
+    fn supported_formats(&self) -> Option<FormatSet> {
+        Some(self.supported_formats.clone())
     }
 }
 
@@ -1210,8 +1211,8 @@ impl ImportDma for VulkanRenderer {
         self.import_dmabuf_internal(dmabuf)
     }
 
-    fn dmabuf_formats(&self) -> Box<dyn Iterator<Item = Format>> {
-        Box::new(self.supported_formats.clone().into_iter())
+    fn dmabuf_formats(&self) -> FormatSet {
+        self.supported_formats.clone()
     }
 }
 
