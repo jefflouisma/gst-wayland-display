@@ -188,7 +188,7 @@ impl<'a, 'buffer> Frame for VulkanFrame<'a, 'buffer> {
         debug!("VulkanFrame::clear color={:?}", color);
         
         let clear_value = vk::ClearColorValue { 
-            float32: [color.r, color.g, color.b, color.a] 
+            float32: [color.r(), color.g(), color.b(), color.a()] 
         };
         
         // If no specific regions, clear the whole target
@@ -518,8 +518,7 @@ impl VulkanRenderer {
         // Query supported formats
         let supported_formats = Self::query_supported_formats(&instance, physical_device);
 
-        info!("Vulkan renderer initialized successfully with {} supported formats", 
-              supported_formats.len());
+        info!("Vulkan renderer initialized successfully with supported formats");
 
         Ok(Self {
             _entry: entry,
@@ -771,8 +770,6 @@ impl VulkanRenderer {
 
     /// Query supported DRM formats from the device
     fn query_supported_formats(instance: &Instance, physical_device: vk::PhysicalDevice) -> FormatSet {
-        let mut formats = FormatSet::default();
-        
         // Common formats that most Vulkan implementations support
         let common_fourccs = [
             Fourcc::Argb8888,
@@ -781,6 +778,7 @@ impl VulkanRenderer {
             Fourcc::Xbgr8888,
         ];
         
+        let mut format_vec: Vec<Format> = Vec::new();
         for fourcc in common_fourccs {
             if let Some(vk_format) = fourcc_to_vk_format(fourcc) {
                 let props = unsafe {
@@ -791,11 +789,11 @@ impl VulkanRenderer {
                 if props.optimal_tiling_features.contains(
                     vk::FormatFeatureFlags::COLOR_ATTACHMENT | vk::FormatFeatureFlags::SAMPLED_IMAGE
                 ) {
-                    formats.insert(Format {
+                    format_vec.push(Format {
                         code: fourcc,
                         modifier: Modifier::Linear,
                     });
-                    formats.insert(Format {
+                    format_vec.push(Format {
                         code: fourcc,
                         modifier: Modifier::Invalid, // Driver-preferred
                     });
@@ -803,7 +801,7 @@ impl VulkanRenderer {
             }
         }
         
-        formats
+        format_vec.into_iter().collect()
     }
 
     /// Import a DMA-BUF as a Vulkan texture
