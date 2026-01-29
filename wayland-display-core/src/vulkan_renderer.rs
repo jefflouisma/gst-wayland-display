@@ -63,7 +63,7 @@ impl std::fmt::Display for VulkanError {
             VulkanError::MissingExtension(ext) => write!(f, "Missing extension: {}", ext),
             VulkanError::VkError(e) => write!(f, "Vulkan error: {:?}", e),
             VulkanError::DmabufImport(e) => write!(f, "DMA-BUF import failed: {}", e),
-            VulkanError::UnsupportedFormat(f) => write!(f, "Unsupported format: {:?}", f),
+            VulkanError::UnsupportedFormat(fmt) => write!(f, "Unsupported format: {:?}", fmt),
             VulkanError::RenderError(e) => write!(f, "Render error: {}", e),
             VulkanError::NoRenderTarget => write!(f, "No render target bound"),
             VulkanError::NotImplemented(feature) => write!(f, "Not implemented: {}", feature),
@@ -415,10 +415,12 @@ impl VulkanRenderer {
         let entry = unsafe { Entry::load() }.map_err(|_| VulkanError::LoadError)?;
 
         // Check instance version
-        let instance_version = entry
-            .try_enumerate_instance_version()
-            .map_err(|e| VulkanError::VkError(e))?
-            .unwrap_or(vk::make_api_version(0, 1, 0, 0));
+        let instance_version = unsafe {
+            entry
+                .try_enumerate_instance_version()
+                .map_err(|e| VulkanError::VkError(e))?
+                .unwrap_or(vk::make_api_version(0, 1, 0, 0))
+        };
 
         let major = vk::api_version_major(instance_version);
         let minor = vk::api_version_minor(instance_version);
