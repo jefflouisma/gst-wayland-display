@@ -642,9 +642,29 @@ impl VulkanRenderer {
         render_pass: vk::RenderPass,
         pipeline_layout: vk::PipelineLayout,
     ) -> Result<vk::Pipeline, VulkanError> {
-        // TODO: Compile SPIR-V shaders at build time
-        // For now, create a minimal pipeline that will be extended
-        
+        // Embedded SPIR-V shaders (fallback if files not compiled)
+        // These are minimal shaders for basic quad rendering
+        static QUAD_VERT_SPV: &[u8] = include_bytes!("shaders/quad.vert.spv");
+        static QUAD_FRAG_SPV: &[u8] = include_bytes!("shaders/quad.frag.spv");
+
+        // Create shader modules
+        let vert_module = Self::create_shader_module(device, QUAD_VERT_SPV)?;
+        let frag_module = Self::create_shader_module(device, QUAD_FRAG_SPV)?;
+
+        let entry_name = c"main";
+
+        let vert_stage = vk::PipelineShaderStageCreateInfo::default()
+            .stage(vk::ShaderStageFlags::VERTEX)
+            .module(vert_module)
+            .name(entry_name);
+
+        let frag_stage = vk::PipelineShaderStageCreateInfo::default()
+            .stage(vk::ShaderStageFlags::FRAGMENT)
+            .module(frag_module)
+            .name(entry_name);
+
+        let shader_stages = [vert_stage, frag_stage];
+
         // Vertex input - empty, using gl_VertexIndex for fullscreen quad
         let vertex_input_info = vk::PipelineVertexInputStateCreateInfo::default();
 
@@ -696,10 +716,8 @@ impl VulkanRenderer {
         let dynamic_state = vk::PipelineDynamicStateCreateInfo::default()
             .dynamic_states(&dynamic_states);
 
-        // Create pipeline without shaders for now - will fail but structure is correct
-        // In production, embed SPIR-V shaders
         let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
-            .stages(&[]) // TODO: Add shader stages
+            .stages(&shader_stages)
             .vertex_input_state(&vertex_input_info)
             .input_assembly_state(&input_assembly)
             .viewport_state(&viewport_state)
@@ -711,10 +729,35 @@ impl VulkanRenderer {
             .render_pass(render_pass)
             .subpass(0);
 
-        // Return null handle for now - pipeline creation requires shaders
-        // This is a placeholder until we add embedded SPIR-V
-        warn!("Graphics pipeline creation skipped - no shaders embedded yet");
-        Ok(vk::Pipeline::null())
+        let pipelines = unsafe {
+            device.create_graphics_pipelines(
+                vk::PipelineCache::null(),
+                &[pipeline_info],
+                None,
+            )
+        }.map_err(|(_, e)| e)?;
+
+        // Cleanup shader modules
+        unsafe {
+            device.destroy_shader_module(vert_module, None);
+            device.destroy_shader_module(frag_module, None);
+        }
+
+        info!("Graphics pipeline created successfully");
+        Ok(pipelines[0])
+    }
+
+    /// Create a shader module from SPIR-V bytecode
+    fn create_shader_module(device: &Device, bytecode: &[u8]) -> Result<vk::ShaderModule, VulkanError> {
+        // SPIR-V requires 4-byte alignment
+        let code: Vec<u32> = bytecode
+            .chunks_exact(4)
+            .map(|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+            .collect();
+
+        let create_info = vk::ShaderModuleCreateInfo::default().code(&code);
+
+        unsafe { device.create_shader_module(&create_info, None).map_err(Into::into) }
     }
 
     /// Create descriptor pool for texture bindings
